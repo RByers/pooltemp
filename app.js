@@ -1,8 +1,8 @@
 'use strict';
 
 const express = require('express');
-const request = require('request');
 const fs = require('fs');
+const fetch = require('node-fetch');
 
 const app = express();
 
@@ -14,91 +14,80 @@ var session_id;
 var authentication_token;
 var device_serial;
 
-function login() {
-	return new Promise(function(resolve, reject) {
-		request.post(
-	    	'https://support.iaqualink.com/users/sign_in.json',
-	    	{ json: {api_key: api_key, email: secrets.email, password: secrets.password }},
-	    	function (error, response, body) {
-	    		if(error) {
-	    			console.log("sign_in.json error", error);
-	    			reject(error);
-    			} else if (response.statusCode !== 200 || 
-    					!('session_id' in body) || !('id' in body) || !('authentication_token' in body)) {
-    				console.log("sign_in.json failure", response.statusCode, body);
-    				reject("sign_in.json failure");
-    			} else {
-	        		session_id = body.session_id;
-	        		user_id = body.id;
-	        		authentication_token = body.authentication_token;
-	        		resolve(session_id);
-	        	}
-	        }
-		);
+async function login() {
+	const response = await fetch('https://support.iaqualink.com/users/sign_in.json', {
+		body: JSON.stringify({
+			api_key: api_key, 
+			email: secrets.email, 
+			password: secrets.password }),
+		headers: {
+			'content-type': 'application/json'},
+		method: 'POST'
 	});
+	if (response.status !== 200)
+		throw new Error('sign_in.json failure - status:' + response.status);
+	const json = await response.json();
+	if (!('session_id' in json) || !('id' in json) || !('authentication_token' in json)) {
+		console.error('Unexpected signin response: ', json);
+		throw new Error('sign_in.json failure - unexpected response');
+	}
+	session_id = json.session_id;
+	user_id = json.id;
+	authentication_token = json.authentication_token;
+	console.log('logged in with session', session_id);
+	return session_id;
 }
 
-function getDevice() {
-	return new Promise(function(resolve, reject) {
-		request.get({
-			url: "https://support.iaqualink.com//devices.json",
-			json: true,
-			qs: {
-				api_key: api_key,
-				authentication_token: authentication_token,
-				user_id: user_id}},
-			function(error, response, body) {
-	    		if(error) {
-	    			console.log("devices.json error", error);
-	    			reject(error);
-    			} else if (response.statusCode !== 200 || !('0' in body) || !('serial_number' in body[0])) {
-    				console.log("devices.json failure", response.statusCode, body);
-    				reject(body);
-				} else {
-					device_serial = body[0].serial_number;
-					resolve(device_serial);
-				}
-			});
-		});
+async function getDevice() {
+	var url = 'https://support.iaqualink.com/devices.json' + 
+		'?api_key=' + api_key +
+		'&authentication_token=' + authentication_token +
+		'&user_id=' + user_id;
+	const response = await fetch(url);
+	if (response.status !== 200) {
+		var body = await response.text();
+		console.error('devices.json failure', url, response.status, response.statusText, body);
+		throw new Error('devices.json failure:' + response.status + ' ' + response.statusText);
+	}
+	const json = await response.json();
+	if (!('0' in json) || !('serial_number' in json[0])) {
+		console.error('Unexpected devices response: ', json);
+		throw new Error('devices.json failure - unexpected response');
+	}
+	device_serial = json[0].serial_number;
+	return device_serial;
 }
 
-function getTemps() {
-	return new Promise(function(resolve, reject) {
-		request.get({
-			url: "https://iaqualink-api.realtime.io/v1/mobile/session.json",
-			json: true,
-			qs: {
-				actionID: "command",
-				command: "get_home",
-				serial: device_serial,
-				sessionID: session_id}},
-			function(error, response, body) {
-	    		if(error) {
-	    			console.log("session.json error", error);
-	    			reject(error);
-    			} else if (response.statusCode !== 200 || !('home_screen' in body)) {
-    				console.log("session.json failure", response.statusCode, body);
-    				reject(body);
-				} else {
-					// Convert array of key/value pairs into an object
-					var items = Object.assign({}, ...body.home_screen);
-					
-					// Compute heater temperature.
-					// "1" means heating, "3" means on but not heating
-					// "spa" (temp 1) seems to take precedence when it's on
-					var heater = 0;
-					if (items.spa_heater==="1")
-						heater = parseInt(items.spa_set_point, 10);
-					else if(items.pool_heater==="1")
-						heater = parseInt(items.pool_set_point, 10);
-						
-					resolve({
-						air: parseInt(items.air_temp, 10),
-						pool: parseInt(items.pool_temp, 10),
-						heater: heater});
-				}
-			});
-		});	
+async function getTemps() {
+	var url = 'https://iaqualink-api.realtime.io/v1/mobile/session.json' +
+		'?actionID=command' +
+		'&command=get_home' +
+		'&serial=' + device_serial +
+		'&sessionID=' + session_id;
+		const response = await fetch(url);
+	if (response.status !== 200) {
+		var body = await response.text();
+		console.error('session.json failure', url, response.status, response.statusText, body);
+		throw new Error('session.json failure:' + response.status + ' ' + response.statusText);
+	}
+	const json = await response.json();
+	
+	// Convert array of key/value pairs into an object
+	var items = Object.assign({}, ...json.home_screen);
+	
+	// Compute heater temperature.
+	// "1" means heating, "3" means on but not heating
+	// "spa" (temp 1) seems to take precedence when it's on
+	var heater = 0;
+	if (items.spa_heater==="1")
+		heater = parseInt(items.spa_set_point, 10);
+	else if(items.pool_heater==="1")
+		heater = parseInt(items.pool_set_point, 10);
+		
+	return {
+		air: parseInt(items.air_temp, 10),
+		pool: parseInt(items.pool_temp, 10),
+		heater: heater};
 }
 
 app.get('/', (req, res) => {
@@ -109,6 +98,7 @@ app.post('/live', (req, res) => {
 	login().then(getDevice).then(getTemps).then(temps => {
 		res.status(200).send('Got temps: ' + JSON.stringify(temps)).end();
 	}).catch(error => {
+		console.error(error);
 		res.status(500).send('Server error: ' + error);
 	});
 });
