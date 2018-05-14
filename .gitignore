@@ -1,2 +1,6 @@
 # Google App Engine generated folder
 appengine-generated/
+node_modules/
+package-lock.json
+# Not to be checked in
+secrets.json
