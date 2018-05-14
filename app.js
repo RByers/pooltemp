@@ -7,7 +7,7 @@ const fs = require('fs');
 const app = express();
 
 const api_key = "EOOEMOW4YR6QNB07";
-var secrets = fs.readFileSync(__dirname + "secrets.json");
+var secrets = JSON.parse(fs.readFileSync(__dirname + "/secrets.json"));
 
 var user_id;
 var session_id;
@@ -26,7 +26,7 @@ function login() {
     			} else if (response.statusCode !== 200 || 
     					!('session_id' in body) || !('id' in body) || !('authentication_token' in body)) {
     				console.log("sign_in.json failure", response.statusCode, body);
-    				reject(body);
+    				reject("sign_in.json failure");
     			} else {
 	        		session_id = body.session_id;
 	        		user_id = body.id;
@@ -108,6 +108,8 @@ app.get('/', (req, res) => {
 app.post('/live', (req, res) => {
 	login().then(getDevice).then(getTemps).then(temps => {
 		res.status(200).send('Got temps: ' + JSON.stringify(temps)).end();
+	}).catch(error => {
+		res.status(500).send('Server error: ' + error);
 	});
 });
 
