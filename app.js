@@ -136,7 +136,7 @@ async function log(response) {
 	// and use a query cursor.
 	let csv = 'timesamp, air, pool, heater\n';
     for(let temps of results[0])
-    	csv += `${temps.timestamp}, ${temps.air}, ${temps.pool}, ${temps.heater}\n`;
+    	csv += `${temps.timestamp.toISOString()}, ${temps.air}, ${temps.pool}, ${temps.heater}\n`;
 	
 	response
 		.status(200)
