@@ -93,6 +93,11 @@ async function getTemps(session) {
 	// Convert array of key/value pairs into an object
 	const items = Object.assign({}, ...json.home_screen);
 	
+	if (!items.air_temp || !items.pool_temp) {
+		console.error('session.json missing temps', json);
+		throw new Error('session.json missing temps');		
+	}
+	
 	// Compute heater temperature.
 	// "1" means heating, "3" means on but not heating
 	// "spa" (temp 1) seems to take precedence when it's on
