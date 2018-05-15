@@ -105,13 +105,34 @@ async function getTemps(session) {
 		heater: heater};
 }
 
+async function update() {
+	var session = await getSession();
+	var temps = await getTemps(session);
+	
+	// Get the most recent database entry
+	const latestTempsKey = datastore.key(['Temps', 'latest']);
+	var results = await datastore.get(latestTempsKey);	
+	if (results[0]) {
+		var lt = results[0];
+		if (temps.air === lt.air && temps.pool === lt.pool && temps.heater === lt.heater)
+			return 'No change: ' + JSON.stringify(temps);
+	}
+	await datastore.upsert({key: latestTempsKey, data: temps});
+	
+	// Append the new entry with a timestamp
+	temps.timestamp = new Date();
+	await datastore.save({key: datastore.key(['Temps']), data: temps});
+
+	return 'Added entry: ' + JSON.stringify(temps);
+}
+
 app.get('/', (req, res) => {
 	res.sendFile(__dirname + "/static/index.html");
 });
 
-app.post('/live', (req, res) => {
-	getSession().then(getTemps).then(temps => {
-		res.status(200).send('Got temps: ' + JSON.stringify(temps)).end();
+app.get('/update', (req, res) => {
+	update(res).then(msg => {
+		res.status(200).send(msg).end();
 	}).catch(error => {
 		console.error(error);
 		res.status(500).send('Server error!');
