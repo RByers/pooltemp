@@ -8,6 +8,9 @@ const app = express();
 
 const api_key = "EOOEMOW4YR6QNB07";
 
+// TODO: Take timezone as a parameter?
+const timeZone = 'Canada/Eastern';
+
 const Datastore = require('@google-cloud/datastore');
 const datastore = Datastore();
 
@@ -135,8 +138,11 @@ async function log(response) {
 	// If this gets really big we could setup a streaming response,
 	// and use a query cursor.
 	let csv = 'timesamp, air, pool, heater\n';
-    for(let temps of results[0])
-    	csv += `${temps.timestamp.toISOString()}, ${temps.air}, ${temps.pool}, ${temps.heater}\n`;
+    for(let temps of results[0]) {
+    	let date = temps.timestamp.toLocaleString('en-US', { timeZone: timeZone });
+    	date = date.replace(",","");
+    	csv += `${date}, ${temps.air}, ${temps.pool}, ${temps.heater}\n`;
+	}
 	
 	response
 		.status(200)
