@@ -89,13 +89,14 @@ async function getTemps(session) {
 		throw new Error('session.json failure:' + response.status + ' ' + response.statusText);
 	}
 	const json = await response.json();
-	
+
 	// Convert array of key/value pairs into an object
 	const items = Object.assign({}, ...json.home_screen);
-	
-	if (!items.air_temp || !items.pool_temp) {
-		console.error('session.json missing temps', json);
-		throw new Error('session.json missing temps');		
+
+	if (items.status !== 'Online') {
+		console.error(`Failed to get temps.  Status: ${items.status} Response: ${items.response}`);
+		// Use empty data so we can visualize how much is missing
+		return {air: '', pool: '', heater: ''};
 	}
 	
 	// Compute heater temperature.
@@ -106,10 +107,14 @@ async function getTemps(session) {
 		heater = parseInt(items.spa_set_point, 10);
 	else if(items.pool_heater==="1")
 		heater = parseInt(items.pool_set_point, 10);
-		
+	else if(items.spa_heater!=="0" && items.spa_heater!=="3")
+		throw new Error('Unexpected spa_heater: ' + items.spa_heater);
+	else if(items.pool_heater!=="0" && items.pool_heater!=="3")
+		throw new Error('Unexpected pool_heater: ' + items.pool_heater);
+
 	return {
-		air: parseInt(items.air_temp, 10),
-		pool: parseInt(items.pool_temp, 10),
+		air: items.air_temp ? parseInt(items.air_temp, 10) : '',
+		pool: items.pool_temp ? parseInt(items.pool_temp, 10) : '',
 		heater: heater};
 }
 
@@ -117,6 +122,9 @@ async function update() {
 	const session = await getSession();
 	const temps = await getTemps(session);
 	
+	if (!temps)
+		return 'Temperature unavailable';
+
 	// Get the most recent database entry
 	const latestTempsKey = datastore.key(['Temps', 'latest']);
 	const results = await datastore.get(latestTempsKey);	
