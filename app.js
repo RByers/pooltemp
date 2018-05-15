@@ -7,14 +7,29 @@ const fetch = require('node-fetch');
 const app = express();
 
 const api_key = "EOOEMOW4YR6QNB07";
-var secrets = JSON.parse(fs.readFileSync(__dirname + "/secrets.json"));
 
-var user_id;
-var session_id;
-var authentication_token;
-var device_serial;
+const Datastore = require('@google-cloud/datastore');
+const datastore = Datastore();
+
+async function getSession() {
+	const sessionKey = datastore.key(['Session', 'default']);
+	
+	var sessions = await datastore.get(sessionKey);
+	if (sessions[0]) { 
+		// TODO handle session expiry
+		return sessions[0];
+	}
+
+	var session = await login();
+	session.device_serial = await getDevice(session);
+	
+	await datastore.upsert({key: sessionKey, data: session});
+	return session;
+}
 
 async function login() {
+	var secrets = JSON.parse(fs.readFileSync(__dirname + "/secrets.json"));
+
 	const response = await fetch('https://support.iaqualink.com/users/sign_in.json', {
 		body: JSON.stringify({
 			api_key: api_key, 
@@ -31,18 +46,19 @@ async function login() {
 		console.error('Unexpected signin response: ', json);
 		throw new Error('sign_in.json failure - unexpected response');
 	}
-	session_id = json.session_id;
-	user_id = json.id;
-	authentication_token = json.authentication_token;
-	console.log('logged in with session', session_id);
-	return session_id;
+	var s = {
+		id: json.session_id,
+		user_id: json.id,
+		authentication_token: json.authentication_token};
+	console.log('logged in with session', s);
+	return s;
 }
 
-async function getDevice() {
+async function getDevice(session) {
 	var url = 'https://support.iaqualink.com/devices.json' + 
 		'?api_key=' + api_key +
-		'&authentication_token=' + authentication_token +
-		'&user_id=' + user_id;
+		'&authentication_token=' + session.authentication_token +
+		'&user_id=' + session.user_id;
 	const response = await fetch(url);
 	if (response.status !== 200) {
 		var body = await response.text();
@@ -54,16 +70,15 @@ async function getDevice() {
 		console.error('Unexpected devices response: ', json);
 		throw new Error('devices.json failure - unexpected response');
 	}
-	device_serial = json[0].serial_number;
-	return device_serial;
+	return json[0].serial_number;
 }
 
-async function getTemps() {
+async function getTemps(session) {
 	var url = 'https://iaqualink-api.realtime.io/v1/mobile/session.json' +
 		'?actionID=command' +
 		'&command=get_home' +
-		'&serial=' + device_serial +
-		'&sessionID=' + session_id;
+		'&serial=' + session.device_serial +
+		'&sessionID=' + session.id;
 		const response = await fetch(url);
 	if (response.status !== 200) {
 		var body = await response.text();
@@ -95,11 +110,11 @@ app.get('/', (req, res) => {
 });
 
 app.post('/live', (req, res) => {
-	login().then(getDevice).then(getTemps).then(temps => {
+	getSession().then(getTemps).then(temps => {
 		res.status(200).send('Got temps: ' + JSON.stringify(temps)).end();
 	}).catch(error => {
 		console.error(error);
-		res.status(500).send('Server error: ' + error);
+		res.status(500).send('Server error!');
 	});
 });
 

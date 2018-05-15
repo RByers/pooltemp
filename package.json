@@ -23,7 +23,8 @@
   },
   "dependencies": {
     "express": "latest",
-    "node-fetch": "latest"
+    "node-fetch": "latest",
+    "@google-cloud/datastore": "latest"
   },
   "devDependencies": {
     "@google-cloud/nodejs-repo-tools": "1.4.17"
