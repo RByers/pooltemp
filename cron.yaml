@@ -1,0 +1,4 @@
+cron:
+- description: "polling update"
+  url: /update
+  schedule: every 5 minutes
