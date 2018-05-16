@@ -13,21 +13,24 @@ const timeZone = 'Canada/Eastern';
 
 const Datastore = require('@google-cloud/datastore');
 const datastore = Datastore();
+const sessionKey = datastore.key(['Session', 'default']);
 
-async function getSession() {
-	const sessionKey = datastore.key(['Session', 'default']);
-	
-	const sessions = await datastore.get(sessionKey);
-	if (sessions[0]) { 
-		// TODO handle session expiry
-		return sessions[0];
-	}
-
+async function doLogin() {
 	const session = await login();
 	session.device_serial = await getDevice(session);
 	
 	await datastore.upsert({key: sessionKey, data: session});
 	return session;
+}
+
+async function getSession() {
+	const sessions = await datastore.get(sessionKey);
+	if (sessions[0]) {
+		// Note that if this session has expired, we'll try to login again in getTemps
+		return sessions[0];
+	}
+
+	return await doLogin();
 }
 
 async function login() {
@@ -77,19 +80,38 @@ async function getDevice(session) {
 }
 
 async function getTemps(session) {
-	const url = 'https://iaqualink-api.realtime.io/v1/mobile/session.json' +
-		'?actionID=command' +
-		'&command=get_home' +
-		'&serial=' + session.device_serial +
-		'&sessionID=' + session.id;
+	
+	let body;
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const url = 'https://iaqualink-api.realtime.io/v1/mobile/session.json' +
+			'?actionID=command' +
+			'&command=get_home' +
+			'&serial=' + session.device_serial +
+			'&sessionID=' + session.id;
 		const response = await fetch(url);
-	if (response.status !== 200) {
-		const body = await response.text();
-		console.error('session.json failure', url, response.status, response.statusText, body);
-		throw new Error('session.json failure:' + response.status + ' ' + response.statusText);
+		body = await response.text();
+		if (response.status !== 200) {
+			console.error('session.json failure', url, response.status, response.statusText, body);
+			throw new Error('session.json failure:' + response.status + ' ' + response.statusText);
+		}
+	
+		if (body) {
+			// Success fetching something, no more attempts
+			break;
+		} else {
+			// Empty body seems to imply a bad session ID, re-auth
+			if (!attempt) {
+				const oldSessionId = session.id;
+				session = await doLogin();
+				console.error(`session.json empty response with session ${oldSessionId}, retrying with new session ${session.id}`);
+			} else {
+				throw new Error('session.json repeated empty response');
+			}
+		}
 	}
-	const json = await response.json();
 
+	const json = JSON.parse(body);
+	
 	// Convert array of key/value pairs into an object
 	const items = Object.assign({}, ...json.home_screen);
 
