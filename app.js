@@ -146,21 +146,32 @@ async function update() {
 	
 	if (!temps)
 		return 'Temperature unavailable';
+	temps.timestamp = new Date();
 
-	// Get the most recent database entry
+	// Get the running entry
 	const latestTempsKey = datastore.key(['Temps', 'latest']);
-	const results = await datastore.get(latestTempsKey);	
-	if (results[0]) {
-		const lt = results[0];
-		if (temps.air === lt.air && temps.pool === lt.pool && temps.heater === lt.heater)
-			return 'No change: ' + JSON.stringify(temps);
+	const results = await datastore.get(latestTempsKey);
+	const last = results[0];
+	
+	// If the temperatures haven't changed and we don't need to keep the running entry
+	const same = last && temps.air === last.air && temps.pool === last.pool && temps.heater === last.heater;
+	if (same && !last.keep) {
+		// Update the running entry with the new timestamp
+		await datastore.upsert({key: latestTempsKey, data: temps});
+		return 'No change: ' + JSON.stringify(temps);		
 	}
+
+	// There's been a change, permanently save the prior entry.
+	delete last.keep;
+	await datastore.save({key: datastore.key(['Temps']), data: last});
+
+	// Setup a new running entry.
+	// If there's actually a temp change, mark the new running entry to prevent
+	// coalescing to ensure we keep the timestamp immediately after a change.
+	if (!same)
+		temps.keep = true;
 	await datastore.upsert({key: latestTempsKey, data: temps});
 	
-	// Append the new entry with a timestamp
-	temps.timestamp = new Date();
-	await datastore.save({key: datastore.key(['Temps']), data: temps});
-
 	return 'Added entry: ' + JSON.stringify(temps);
 }
 
