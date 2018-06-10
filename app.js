@@ -23,7 +23,7 @@ async function doLogin() {
 	return session;
 }
 
-async function getSession() {
+async function getSession() {	
 	const sessions = await datastore.get(sessionKey);
 	if (sessions[0]) {
 		// Note that if this session has expired, we'll try to login again in getTemps
