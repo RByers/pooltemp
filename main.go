@@ -62,15 +62,20 @@ func doLog(ctx context.Context, response http.ResponseWriter) error {
     fmt.Fprintf(response, "timesamp, air, pool, heater\n")
     for it := query.Run(ctx); ; {
         var temps Temps
+        // TODO: Handle type mismatch for legacy entries with empty strings
+        temps.Air = -1
+        temps.Heater = -1
+        temps.Pool = -1
         _, err := it.Next(&temps)
         if err == datastore.Done {
             break
         }
-        if ferr, ok := err.(*datastore.ErrFieldMismatch); ok {
-        	if ferr.FieldName == "keep" {
+        if _, ok := err.(*datastore.ErrFieldMismatch); ok {
+        	// TODO: Migrate data to use -1 for missing
+        	//if ferr.FieldName == "keep" {
         		// Ignore the Keep field for the "latest" entry
         		err = nil
-        	}
+        	//}
         }
         if err != nil {
             return errors.New("Query Next failed: " + err.Error())
