@@ -57,6 +57,11 @@ func doLog(ctx context.Context, response http.ResponseWriter) error {
 	if err != nil {
 		return errors.New("Failed to load timezone: " + err.Error())
 	}
+	
+	// After this point errors won't actually prevent the success status
+	// But we still get the errors in the log, so it's not a huge problem
+	response.Header().Set("Content-Type", "text/csv; charset=utf-8")
+
     query := datastore.NewQuery("Temps").
     	Order("-timestamp")
     fmt.Fprintf(response, "timesamp, air, pool, heater\n")
@@ -85,7 +90,6 @@ func doLog(ctx context.Context, response http.ResponseWriter) error {
         	temps.Timestamp.In(loc).Format("1/2/2006 15:04"),
         	tempStr(temps.Air), tempStr(temps.Pool), tempStr(temps.Heater))
     }
-   response.Header().Set("Content-Type", "text/csv; charset=utf-8")
    return nil
  }
 
