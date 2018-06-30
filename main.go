@@ -22,6 +22,9 @@ const apiKey = "EOOEMOW4YR6QNB07"
 // TODO: Take timeZone as a parameter?
 const timeZone = "Canada/Eastern"
 
+// Some invalid temp value to indicate error
+const tempErr = -99
+
 type Session struct {
 	AuthenticationToken string 	`datastore:"authentication_token" json:"authentication_token"`
     DeviceSerial 		string	`datastore:"device_serial"`
@@ -68,15 +71,15 @@ func doLog(ctx context.Context, response http.ResponseWriter) error {
     for it := query.Run(ctx); ; {
         var temps Temps
         // TODO: Handle type mismatch for legacy entries with empty strings
-        temps.Air = -1
-        temps.Heater = -1
-        temps.Pool = -1
+        temps.Air = tempErr
+        temps.Heater = tempErr
+        temps.Pool = tempErr
         _, err := it.Next(&temps)
         if err == datastore.Done {
             break
         }
         if _, ok := err.(*datastore.ErrFieldMismatch); ok {
-        	// TODO: Migrate data to use -1 for missing
+        	// TODO: Migrate data to use tempErr for missing
         	//if ferr.FieldName == "keep" {
         		// Ignore the Keep field for the "latest" entry
         		err = nil
@@ -294,7 +297,10 @@ func getTemps(ctx context.Context, session Session, attempts int) (Temps, error)
 	
 	resp, err := client.Get(url)
 	if err != nil {
-		return Temps{}, errors.New("session.json failed: " + err.Error())
+		// Can fail with deadline exceeded (default 5s)
+		log.Errorf(ctx, "Fetch session.js failed: " + err.Error())
+		return Temps{Air: tempErr, Pool: tempErr, Heater: tempErr}, nil
+		//return Temps{}, errors.New("session.json failed: " + err.Error())
 	}
 	defer resp.Body.Close()
 
@@ -347,7 +353,7 @@ func getTemps(ctx context.Context, session Session, attempts int) (Temps, error)
 			return getTemps(ctx, session, attempts)
 		} else {
 			log.Errorf(ctx, "Device status " + status + ", giving up")
-			return Temps{Air: -1, Pool: -1, Heater: -1}, nil
+			return Temps{Air: tempErr, Pool: tempErr, Heater: tempErr}, nil
 		}
 	}
 	
@@ -371,7 +377,7 @@ func getTemps(ctx context.Context, session Session, attempts int) (Temps, error)
 		return Temps{}, errors.New("Unexpected pool_heater: " + pool)
 	}
 
-	air := -1
+	air := tempErr
 	if at := items["air_temp"]; at != "" {
 		air, err = strconv.Atoi(at)
 		if err != nil {
@@ -379,7 +385,7 @@ func getTemps(ctx context.Context, session Session, attempts int) (Temps, error)
 		}
 	}
 
-	pool := -1
+	pool := tempErr
 	if pt := items["pool_temp"]; pt != "" {
 		pool, err = strconv.Atoi(pt)
 		if err != nil {
