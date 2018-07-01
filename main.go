@@ -122,7 +122,7 @@ func doUpdate(ctx context.Context, response http.ResponseWriter) error {
     temps.Timestamp = time.Now()
     
     // Get the running entry
-	latestKey := datastore.NewKey(ctx, "Temps", "latest", 0, nil);
+	latestKey := datastore.NewKey(ctx, "Temps", "latest", 0, nil)
 	var latest struct {
 		Temps
 		Keep	 bool	`datastore:"keep"`
@@ -400,8 +400,42 @@ func getTemps(ctx context.Context, session Session, attempts int) (Temps, error)
 	}, nil
 }
 
+func round(x float64) int {
+	return int(x+0.5)
+}
+
+func ftoc(degf int) int {
+	return round(float64(degf-32)*5/9)
+}
+
+func displayHandler(response http.ResponseWriter, request *http.Request) {
+	ctx := appengine.NewContext(request)
+	
+	// Get the running entry
+	latestKey := datastore.NewKey(ctx, "Temps", "latest", 0, nil)
+	var latest struct {
+		Temps
+		Keep	 bool	`datastore:"keep"`
+	}
+	err := datastore.Get(ctx, latestKey, &latest)
+	if err != nil {
+	    log.Criticalf(ctx, err.Error())
+        http.Error(response, err.Error(), http.StatusInternalServerError)
+        return
+	}
+	
+	air := ftoc(latest.Air)
+	pool := ftoc(latest.Pool)
+	h := ""
+	if latest.Heater > 0 {
+		h = "."
+	}
+	fmt.Fprintf(response, "%2d%2d%s", air, pool, h)
+}
+
 func main() {
 	http.HandleFunc("/log.csv", logHandler)
     http.HandleFunc("/update", updateHandler)
+    http.HandleFunc("/display", displayHandler)
     appengine.Main() // Starts the server to receive requests
 }
