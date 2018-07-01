@@ -4,3 +4,4 @@ node_modules/
 package-lock.json
 # Not to be checked in
 secrets.json
+arduino/secrets.h
