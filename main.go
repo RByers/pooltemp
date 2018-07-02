@@ -423,7 +423,7 @@ func displayHandler(response http.ResponseWriter, request *http.Request) {
         return
     }
     if latest.Air == tempErr && latest.Pool == tempErr {
-        response.Write([]byte("Offline"))
+        response.Write([]byte("OFFLINE"))
         return
     }
     air := ftoc(latest.Air)
