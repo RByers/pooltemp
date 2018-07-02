@@ -1,4 +1,4 @@
 cron:
 - description: "polling update"
   url: /update
-  schedule: every 5 minutes
+  schedule: every 2 minutes
