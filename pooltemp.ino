@@ -5,7 +5,35 @@
 #include "secrets.h"
 
 Adafruit_AlphaNum4 alpha4 = Adafruit_AlphaNum4();
-WiFiClient client;
+
+const char* server = "rbyers-pooltemp.appspot.com";
+
+// Update data every 2 minutes
+const int updateIntervalSec = 2 * 60;
+
+// Don't display data older than 15 minutes
+const int maxStaleSec = 15 * 60;
+
+void log(String msg, bool newline = true) {
+  unsigned long time = millis() / 1000;
+  unsigned int sec = time % 60;
+  time /= 60;
+  unsigned int min = time % 60;
+  time /= 60;
+  Serial.print(time);
+  Serial.print(":");
+  if (min < 10)
+    Serial.print("0");
+  Serial.print(min);
+  Serial.print(":");
+  if (sec < 10)
+    Serial.print("0");
+  Serial.print(sec);
+  Serial.print(": ");
+  Serial.print(msg);
+  if (newline)
+    Serial.println();
+}
 
 void showMessage(const char* msg) {
   alpha4.clear();
@@ -23,41 +51,28 @@ void showMessage(const char* msg) {
 }
 
 void setup() {
-  Serial.begin(9600);
-  // Give the serial port a chance to connect so we don't miss messages.
-  // But don't block for long in case there's none connected.
-  delay(100);
-  Serial.println("Starting up");
-  
   alpha4.begin(0x70);
   alpha4.clear();
   alpha4.writeDisplay();
-
+  showMessage("BOOT");
+  
+  Serial.begin(9600);
+  
   //Configure pins for Adafruit ATWINC1500 Feather
   WiFi.setPins(8,7,4,2);
 
-  showMessage("WiFi");
-
   // check for the presence of the shield:
   if (WiFi.status() == WL_NO_SHIELD) {
-    Serial.println("No WiFi found");
+    log("No WiFi found");
     showMessage("NOWS");
     // don't continue:
     while (true);
   }
 
-  // attempt to connect to WiFi network:
-  int status;
-  do {
-    Serial.print("Trying to connect to SSID: ");
-    Serial.println(SECRET_SSID);
-    status = WiFi.begin(SECRET_SSID, SECRET_PASS);
-    if (status != WL_CONNECTED)
-      delay(10000);
-  } while (status != WL_CONNECTED);
-
-  Serial.println("Connected to WiFi");
-  showMessage("HTTP");  
+  // Give the serial port a chance to connect so we don't miss messages.
+  // But don't block for long in case there's none connected.
+  delay(2000);
+  log("Starting up");  
 }
 
 String readLine(WiFiClient client) {
@@ -78,37 +93,81 @@ String readLine(WiFiClient client) {
 unsigned long lastUpdate = 0;
 unsigned long lastAttempt = 0;
 
+bool haveTemps() {
+  return (lastUpdate && millis() - lastUpdate < maxStaleSec * 1000);
+}
+
+String WiFiStatus(int status) {
+  switch(status) {
+  case WL_IDLE_STATUS:
+    return "WL_IDLE_STATUS";  
+  case WL_NO_SSID_AVAIL:
+    return "WL_NO_SSID_AVAIL";  
+  case WL_CONNECTED:
+    return "WL_CONNECTED";  
+  case WL_CONNECT_FAILED:
+    return "WL_CONNECT_FAILED";  
+  case WL_CONNECTION_LOST:
+    return "WL_CONNECTION_LOST";  
+  case WL_DISCONNECTED:
+    return "WL_DISCONNECTED";  
+  default:
+    return String(status);
+  }
+}
+
 void loop() {
   unsigned long time = millis();
+
+  // attempt to connect to WiFi network:
+  int status;
+  while(status = WiFi.status() != WL_CONNECTED) {
+    if (!haveTemps())
+      showMessage("WiFi");
+    log("WiFi Status: " + WiFiStatus(status));
+    log(String("Trying to connect to SSID: ") + SECRET_SSID);
+    status = WiFi.begin(SECRET_SSID, SECRET_PASS);
+    if (status == WL_CONNECTED) {
+      log(String("Connected to WiFi, RSSI:") + WiFi.RSSI());
+    } else {
+      log("WiFi connect failed: " + WiFiStatus(status));
+      delay(2000);
+    }
+  }
+  
   if (lastAttempt > time || lastUpdate > time) {
     // Overflow protection (~50 days)
-    lastAttempt = 0;
-    lastUpdate = 0;
+    lastAttempt = 1;
+    lastUpdate = 1;
   }
-  // Only attempt an update every 5 minutes
-  if (lastAttempt && time - lastAttempt < 60 * 5 * 1000)
+  if (lastAttempt && time - lastAttempt < updateIntervalSec * 1000)
     return;
   lastAttempt = time;
 
-  Serial.println("Attempting to connect");
+  WiFiClient client;
+  log(String("WiFi RSSI: ") + WiFi.RSSI());
+  log(String("Attempting to connect to ") + server);
 
-  if (!client.connect("rbyers-pooltemp.appspot.com", 80)) {
-    Serial.println("Connection failed");
-    if (time - lastUpdate > 60 * 15 * 1000) {
-      // Been more than 15 minutes since we got the data, show error
+  if (!haveTemps())
+      showMessage("HTTP");
+
+  if (!client.connect(server, 80)) {
+    log("Connection failed");
+    if (!haveTemps())
       showMessage("FAIL");
-    }
+    client.stop();
     return;
   }
 
   // Make the HTTP request
   client.println("GET /display HTTP/1.1");
-  client.println("Host: rbyers-pooltemp.appspot.com");
+  client.print("Host: ");
+  client.println(server);
   client.println("Connection: close");
   client.println("User-Agent: RByers Arduino pooltemp"); 
   client.println();
 
-  Serial.println("Request sent");
+  log("Request sent");
 
   bool doneHeaders = false;
   bool doneStatus = false;
@@ -121,25 +180,28 @@ void loop() {
       doneStatus = true;
       int i = s.indexOf(" ");
       if (i == -1) {
-        Serial.print("Invalid HTTP response: ");
-        Serial.println(s);
-        showMessage("HTER");
+        log("Invalid HTTP response: " + s);
+        if (!haveTemps())
+          showMessage("HTER");
         break;
       }
       String status = s.substring(i+1, i+4);
       if (status != "200") {
-        Serial.print("HTTP Failed: ");
-        Serial.println(s);
-        showMessage("HSER");
+        log("HTTP Failed: " + s);
+        if (!haveTemps())
+          showMessage("HERR");
         break;
       }
     }
     if (doneHeaders) {
       // First line of the body - just show it
-      Serial.print("Updating display: ");
-      Serial.println(s);
-      showMessage(s.c_str());
-      lastUpdate = time;
+      if (haveTemps() && s == "OFFLINE") {
+        log("Got offline");
+      } else {
+        log("Updating display: " + s);
+        showMessage(s.c_str());
+        lastUpdate = time;
+      }
       break;
     }
     if (!doneHeaders && s == "") {
