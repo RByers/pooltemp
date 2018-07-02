@@ -39,6 +39,11 @@ type Temps struct {
     Timestamp   time.Time   `datastore:"timestamp"` 
 }
 
+type LatestTemps struct {
+    Temps
+    Keep     bool   `datastore:"keep"`
+}
+
 func logHandler(response http.ResponseWriter, request *http.Request) {
     ctx := appengine.NewContext(request)
     err := doLog(ctx, response)
@@ -123,10 +128,7 @@ func doUpdate(ctx context.Context, response http.ResponseWriter) error {
     
     // Get the running entry
     latestKey := datastore.NewKey(ctx, "Temps", "latest", 0, nil)
-    var latest struct {
-        Temps
-        Keep     bool   `datastore:"keep"`
-    }
+    var latest LatestTemps
     err = datastore.Get(ctx, latestKey, &latest)
     if err != nil && err != datastore.ErrNoSuchEntity {
         return errors.New("Failed to get latest Temps: " + err.Error())
@@ -413,18 +415,15 @@ func displayHandler(response http.ResponseWriter, request *http.Request) {
     
     // Get the running entry
     latestKey := datastore.NewKey(ctx, "Temps", "latest", 0, nil)
-    var latest struct {
-        Temps
-        Keep     bool   `datastore:"keep"`
-    }
+    var latest LatestTemps
     err := datastore.Get(ctx, latestKey, &latest)
     if err != nil {
         log.Criticalf(ctx, err.Error())
         http.Error(response, err.Error(), http.StatusInternalServerError)
         return
     }
-    if latest.Air == tempErr || latest.Pool == tempErr {
-        http.Error(response, "iAqualink offline", http.StatusServiceUnavailable)
+    if latest.Air == tempErr && latest.Pool == tempErr {
+        response.Write([]byte("Offline"))
         return
     }
     air := ftoc(latest.Air)
