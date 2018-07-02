@@ -423,7 +423,10 @@ func displayHandler(response http.ResponseWriter, request *http.Request) {
         http.Error(response, err.Error(), http.StatusInternalServerError)
         return
 	}
-	
+	if latest.Air == tempErr || latest.Pool == tempErr {
+		http.Error(response, "iAqualink offline", http.StatusServiceUnavailable)
+		return
+	}
 	air := ftoc(latest.Air)
 	pool := ftoc(latest.Pool)
 	h := ""
