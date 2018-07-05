@@ -1,4 +1,3 @@
-#include <Adafruit_SleepyDog.h>
 #include <WiFi101.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -220,11 +219,4 @@ void loop() {
   // (at least according to my cheap USB power monitor). Just disconnect
   // between update intervals to save power.
   WiFi.disconnect();
-
-  // If we've been running long enough that a sketch upload is unlikely,
-  // go to sleep until the next update time.
-  if (millis() > 60 * 1000) {
-    log(String("Sleeping for ") + updateIntervalSec + " seconds");
-    Watchdog.sleep(updateIntervalSec * 1000);
-  }
 }
