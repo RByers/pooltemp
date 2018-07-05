@@ -1,3 +1,4 @@
+#include <Adafruit_SleepyDog.h>
 #include <WiFi101.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -10,6 +11,7 @@ const char* server = "rbyers-pooltemp.appspot.com";
 
 // Update data every 2 minutes
 const int updateIntervalSec = 2 * 60;
+//const int updateIntervalSec = 10;
 
 // Don't display data older than 15 minutes
 const int maxStaleSec = 15 * 60;
@@ -68,6 +70,9 @@ void setup() {
     // don't continue:
     while (true);
   }
+  
+  // Limits receives to the 100ms beacon - should be fine for our purposes.
+  WiFi.maxLowPowerMode(); 
 
   // Give the serial port a chance to connect so we don't miss messages.
   // But don't block for long in case there's none connected.
@@ -118,6 +123,15 @@ String WiFiStatus(int status) {
 
 void loop() {
   unsigned long time = millis();
+  
+  if (lastAttempt > time || lastUpdate > time) {
+    // Overflow protection (~50 days)
+    lastAttempt = 1;
+    lastUpdate = 1;
+  }
+  if (lastAttempt && time - lastAttempt < updateIntervalSec * 1000)
+    return;
+  lastAttempt = time;
 
   // attempt to connect to WiFi network:
   int status;
@@ -131,18 +145,11 @@ void loop() {
       log(String("Connected to WiFi, RSSI:") + WiFi.RSSI());
     } else {
       log("WiFi connect failed: " + WiFiStatus(status));
+      if (!haveTemps())
+        showMessage("WiFL");
       delay(2000);
     }
   }
-  
-  if (lastAttempt > time || lastUpdate > time) {
-    // Overflow protection (~50 days)
-    lastAttempt = 1;
-    lastUpdate = 1;
-  }
-  if (lastAttempt && time - lastAttempt < updateIntervalSec * 1000)
-    return;
-  lastAttempt = time;
 
   WiFiClient client;
   log(String("WiFi RSSI: ") + WiFi.RSSI());
@@ -156,58 +163,68 @@ void loop() {
     if (!haveTemps())
       showMessage("FAIL");
     client.stop();
-    return;
-  }
-
-  // Make the HTTP request
-  client.println("GET /display HTTP/1.1");
-  client.print("Host: ");
-  client.println(server);
-  client.println("Connection: close");
-  client.println("User-Agent: RByers Arduino pooltemp"); 
-  client.println();
-
-  log("Request sent");
-
-  bool doneHeaders = false;
-  bool doneStatus = false;
-  while(client.connected()) {
-    String s = readLine(client);
-    //Serial.print("Read line: ");
-    //Serial.println(s);
-    
-    if (!doneStatus) {
-      doneStatus = true;
-      int i = s.indexOf(" ");
-      if (i == -1) {
-        log("Invalid HTTP response: " + s);
-        if (!haveTemps())
-          showMessage("HTER");
-        break;
-      }
-      String status = s.substring(i+1, i+4);
-      if (status != "200") {
-        log("HTTP Failed: " + s);
-        if (!haveTemps())
-          showMessage("HERR");
-        break;
-      }
-    }
-    if (doneHeaders) {
-      // First line of the body - just show it
-      if (haveTemps() && s == "OFFLINE") {
-        log("Got offline");
-      } else {
-        log("Updating display: " + s);
-        showMessage(s.c_str());
-        lastUpdate = time;
-      }
-      break;
-    }
-    if (!doneHeaders && s == "") {
-      doneHeaders = true;
-    }
-  }
+  } else {
+    // Make the HTTP request
+    client.println("GET /display HTTP/1.1");
+    client.print("Host: ");
+    client.println(server);
+    client.println("Connection: close");
+    client.println("User-Agent: RByers Arduino pooltemp"); 
+    client.println();
   
-  client.stop();
+    log("Request sent");
+  
+    bool doneHeaders = false;
+    bool doneStatus = false;
+    while(client.connected()) {
+      String s = readLine(client);
+      //Serial.print("Read line: ");
+      //Serial.println(s);
+      
+      if (!doneStatus) {
+        doneStatus = true;
+        int i = s.indexOf(" ");
+        if (i == -1) {
+          log("Invalid HTTP response: " + s);
+          if (!haveTemps())
+            showMessage("HTER");
+          break;
+        }
+        String status = s.substring(i+1, i+4);
+        if (status != "200") {
+          log("HTTP Failed: " + s);
+          if (!haveTemps())
+            showMessage("HERR");
+          break;
+        }
+      }
+      if (doneHeaders) {
+        // First line of the body - just show it
+        if (haveTemps() && s == "OFFLINE") {
+          log("Got offline");
+        } else {
+          log("Updating display: " + s);
+          showMessage(s.c_str());
+          lastUpdate = time;
+        }
+        break;
+      }
+      if (!doneHeaders && s == "") {
+        doneHeaders = true;
+      }
+    }
+    client.stop();
+  }
+
+  // The WiFi chip appears to draw ~100mA even in max power saving mode
+  // (at least according to my cheap USB power monitor). Just disconnect
+  // between update intervals to save power.
+  WiFi.disconnect();
+
+  // If we've been running long enough that a sketch upload is unlikely,
+  // go to sleep until the next update time.
+  if (millis() > 60 * 1000) {
+    log(String("Sleeping for ") + updateIntervalSec + " seconds");
+    Watchdog.sleep(updateIntervalSec * 1000);
+  }
 }
