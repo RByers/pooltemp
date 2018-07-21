@@ -15,6 +15,8 @@ const int updateIntervalSec = 2 * 60;
 // Don't display data older than 15 minutes
 const int maxStaleSec = 15 * 60;
 
+const int gmtOffset = -5;
+
 void log(String msg, bool newline = true) {
   unsigned long time = millis() / 1000;
   unsigned int sec = time % 60;
@@ -96,6 +98,7 @@ String readLine(WiFiClient client) {
 
 unsigned long lastUpdate = 0;
 unsigned long lastAttempt = 0;
+unsigned long lastTime = 0;
 
 bool haveTemps() {
   return (lastUpdate && millis() - lastUpdate < maxStaleSec * 1000);
@@ -129,6 +132,7 @@ void loop() {
     // Overflow protection (~50 days)
     lastAttempt = 1;
     lastUpdate = 1;
+    lastTime = 1;
   }
   if (lastAttempt && time - lastAttempt < updateIntervalSec * 1000)
     return;
@@ -154,8 +158,25 @@ void loop() {
 
   WiFiClient client;
   log(String("WiFi RSSI: ") + WiFi.RSSI());
-  log(String("Attempting to connect to ") + server);
 
+  // Every 10 minutes query the time via NTP to set display brightness
+  if (!lastTime || time - lastTime > 10 * 60 * 1000) {
+    if (!haveTemps())
+      showMessage("NTP");
+    unsigned long ntp = WiFi.getTime();
+    log(String("Got time: ") + ntp);
+    if (ntp > 0) {
+      int hour = (ntp / 3600 + gmtOffset) % 24;
+      bool night = hour >= 21 || hour < 7;
+      int brightness = night ? 3 : 7; // 0-15
+      log(String("Hour: ") + hour + " Brightness: " + brightness);
+      alpha4.setBrightness(brightness);
+      lastTime = time;
+    }
+  }
+  
+  
+  log(String("Attempting to connect to ") + server);
   if (!haveTemps())
       showMessage("HTTP");
 
