@@ -120,6 +120,8 @@ String WiFiStatus(int status) {
   }
 }
 
+int failCount = 0;
+
 void loop() {
   unsigned long time = millis();
   
@@ -159,10 +161,14 @@ void loop() {
 
   if (!client.connect(server, 80)) {
     log("Connection failed");
-    if (!haveTemps())
-      showMessage("FAIL");
-    client.stop();
+    failCount++;
+    if (!haveTemps()) {
+      String msg = String("F") + String(failCount); 
+      showMessage(msg.c_str());
+    }
+    //client.stop();
   } else {
+    failCount = 0;
     // Make the HTTP request
     client.println("GET /display HTTP/1.1");
     client.print("Host: ");
@@ -218,5 +224,5 @@ void loop() {
   // The WiFi chip appears to draw ~100mA even in max power saving mode
   // (at least according to my cheap USB power monitor). Just disconnect
   // between update intervals to save power.
-  WiFi.disconnect();
+  // WiFi.disconnect();
 }
