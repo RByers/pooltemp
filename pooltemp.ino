@@ -8,6 +8,9 @@ Adafruit_AlphaNum4 alpha4 = Adafruit_AlphaNum4();
 
 const char* server = "rbyers-pooltemp.appspot.com";
 
+bool rssibug = false;
+bool wifireset = false;
+
 // Update data every 2 minutes
 const int updateIntervalSec = 2 * 60;
 //const int updateIntervalSec = 10;
@@ -46,7 +49,7 @@ void showMessage(const char* msg) {
     if (*(p+1) == '.') {
       dot = true;
     }
-    alpha4.writeDigitAscii(i, *p, dot);
+    alpha4.writeDigitAscii(i, *p, dot || (i==0 && rssibug) || (i==1 && wifireset));
     if (dot)
       p++;
   }
@@ -73,7 +76,8 @@ void setup() {
   }
   
   // Limits receives to the 100ms beacon - should be fine for our purposes.
-  WiFi.maxLowPowerMode(); 
+  // TODO: Re-enable once WiFi seems reliable
+  //WiFi.maxLowPowerMode(); 
 
   // Give the serial port a chance to connect so we don't miss messages.
   // But don't block for long in case there's none connected.
@@ -123,8 +127,6 @@ String WiFiStatus(int status) {
   }
 }
 
-int failCount = 0;
-
 void loop() {
   unsigned long time = millis();
   
@@ -138,12 +140,21 @@ void loop() {
     return;
   lastAttempt = time;
 
-  // attempt to connect to WiFi network:
+  // Attempt to work around issue with silent WiFi disconnect
+  // https://github.com/arduino-libraries/WiFi101/issues/86  
+  if (WiFi.status() == WL_CONNECTED && WiFi.RSSI() == 0) {
+    showMessage("RSSI");
+    rssibug = true;
+    WiFi.disconnect();
+  }
+  
+  // Attempt to connect to WiFi network
   int status;
   while(status = WiFi.status() != WL_CONNECTED) {
     if (!haveTemps())
       showMessage("WiFi");
     log("WiFi Status: " + WiFiStatus(status));
+    log(String("WiFi RSSI: ") + WiFi.RSSI());
     log(String("Trying to connect to SSID: ") + SECRET_SSID);
     status = WiFi.begin(SECRET_SSID, SECRET_PASS);
     if (status == WL_CONNECTED) {
@@ -182,14 +193,13 @@ void loop() {
 
   if (!client.connect(server, 80)) {
     log("Connection failed");
-    failCount++;
     if (!haveTemps()) {
-      String msg = String("F") + String(failCount); 
-      showMessage(msg.c_str());
+      showMessage("FAIL");
+      WiFi.disconnect();
+      wifireset = true;
     }
     //client.stop();
   } else {
-    failCount = 0;
     // Make the HTTP request
     client.println("GET /display HTTP/1.1");
     client.print("Host: ");
