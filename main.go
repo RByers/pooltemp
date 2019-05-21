@@ -46,7 +46,8 @@ type LatestTemps struct {
 
 func logHandler(response http.ResponseWriter, request *http.Request) {
     ctx := appengine.NewContext(request)
-    err := doLog(ctx, response)
+
+    err := doLog(ctx, response, request.FormValue("end"), request.FormValue("days"))
     if err != nil {
         log.Criticalf(ctx, err.Error())
         http.Error(response, err.Error(), http.StatusInternalServerError)
@@ -60,20 +61,39 @@ func tempStr(i int) string {
     return strconv.Itoa(i)
 }
 
-func doLog(ctx context.Context, response http.ResponseWriter) error {
+func doLog(ctx context.Context, response http.ResponseWriter, end string, days string) error {
     loc, err := time.LoadLocation(timeZone)
     if err != nil {
         return errors.New("Failed to load timezone: " + err.Error())
     }
-    
+
+    endTime := time.Now()
+    if end != "" {
+        endTime, err = time.ParseInLocation("1/2/2006", end, loc)
+        if err != nil {
+            return errors.New("Failed to parse end param: " + err.Error())
+        }
+        endTime = endTime.AddDate(0, 0, 1)
+    }
+
+    dayCount := 7
+    if days != "" {
+        dayCount, err = strconv.Atoi(days)
+        if err != nil {
+            return errors.New("Failed to parse days param: " + err.Error())
+        }
+    }
+    startTime := endTime.AddDate(0, 0, dayCount * -1)
+
     // After this point errors won't actually prevent the success status
     // But we still get the errors in the log, so it's not a huge problem
     response.Header().Set("Content-Type", "text/csv; charset=utf-8")
 
     query := datastore.NewQuery("Temps").
-        Filter("Timestamp >", 0).
-        Order("-Timestamp")
-    fmt.Fprintf(response, "timesamp, air, pool, heater\n")
+        Filter("Timestamp >=", startTime).
+        Filter("Timestamp <", endTime).
+        Order("-Timestamp")    
+    fmt.Fprintf(response, "timesamp, air, pool, heater\n")    
     for it := query.Run(ctx); ; {
         var temps Temps
         _, err := it.Next(&temps)
