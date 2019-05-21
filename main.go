@@ -26,22 +26,22 @@ const timeZone = "Canada/Eastern"
 const tempErr = -99
 
 type Session struct {
-    AuthenticationToken string  `datastore:"authentication_token" json:"authentication_token"`
-    DeviceSerial        string  `datastore:"device_serial"`
-    Id                  string  `datastore:"id" json:"session_id"` 
-    UserId              int     `datastore:"user_id" json:"id"`
+    AuthenticationToken string  `json:"authentication_token"`
+    DeviceSerial        string  `json:"device_serial"`
+    Id                  string  `json:"session_id"` 
+    UserId              int     `json:"id"`
 }
 
 type Temps struct {
-    Air         int         `datastore:"air"`
-    Heater      int         `datastore:"heater"`
-    Pool        int         `datastore:"pool"`
-    Timestamp   time.Time   `datastore:"timestamp"` 
+    Air         int
+    Heater      int
+    Pool        int
+    Timestamp   time.Time
 }
 
 type LatestTemps struct {
     Temps
-    Keep     bool   `datastore:"keep"`
+    Keep     bool
 }
 
 func logHandler(response http.ResponseWriter, request *http.Request) {
@@ -71,29 +71,24 @@ func doLog(ctx context.Context, response http.ResponseWriter) error {
     response.Header().Set("Content-Type", "text/csv; charset=utf-8")
 
     query := datastore.NewQuery("Temps").
-        Order("-timestamp")
+        Filter("Timestamp >", 0).
+        Order("-Timestamp")
     fmt.Fprintf(response, "timesamp, air, pool, heater\n")
     for it := query.Run(ctx); ; {
         var temps Temps
-        // TODO: Handle type mismatch for legacy entries with empty strings
-        temps.Air = tempErr
-        temps.Heater = tempErr
-        temps.Pool = tempErr
         _, err := it.Next(&temps)
         if err == datastore.Done {
             break
         }
-        if _, ok := err.(*datastore.ErrFieldMismatch); ok {
-            // TODO: Migrate data to use tempErr for missing
-            //if ferr.FieldName == "keep" {
+        if ferr, ok := err.(*datastore.ErrFieldMismatch); ok {
+            if ferr.FieldName == "Keep" {
                 // Ignore the Keep field for the "latest" entry
                 err = nil
-            //}
+            }
         }
         if err != nil {
             return errors.New("Query Next failed: " + err.Error())
         }
-        // TODO: Timezone
         fmt.Fprintf(response, "%s, %s, %s, %s\n",
             temps.Timestamp.In(loc).Format("1/2/2006 15:04"),
             tempStr(temps.Air), tempStr(temps.Pool), tempStr(temps.Heater))
