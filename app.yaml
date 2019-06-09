@@ -6,5 +6,5 @@ handlers:
   static_files: static/index.html
   upload: static/.*$
 
-- url: /(update|display|log\.csv)$
+- url: /(update|display|daily|log\.csv)$
   script: _go_app

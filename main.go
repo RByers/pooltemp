@@ -25,13 +25,15 @@ const timeZone = "Canada/Eastern"
 // Some invalid temp value to indicate error
 const tempErr = -99
 
+// Session hoolds details of the iAqualink session
 type Session struct {
 	AuthenticationToken string `json:"authentication_token"`
 	DeviceSerial        string `json:"device_serial"`
-	Id                  string `json:"session_id"`
-	UserId              int    `json:"id"`
+	ID                  string `json:"session_id" datastore:"Id"`
+	UserID              int    `json:"id" datastore:"UserId"`
 }
 
+// Temps is a single temperature entry
 type Temps struct {
 	Air       int
 	Heater    int
@@ -39,14 +41,24 @@ type Temps struct {
 	Timestamp time.Time
 }
 
+// LatestTemps is the most recent temperature entry (subject to update)
 type LatestTemps struct {
 	Temps
 	Keep bool
 }
 
+// Day is summary details for a single day
+type Day struct {
+	Date          time.Time
+	HeaterMinutes int
+	AvgAir        int
+	AvgPool       int
+	ErrorMinutes  int
+	TotalMinutes  int
+}
+
 func logHandler(response http.ResponseWriter, request *http.Request) {
 	ctx := appengine.NewContext(request)
-
 	err := doLog(ctx, response, request.FormValue("end"), request.FormValue("days"))
 	if err != nil {
 		log.Criticalf(ctx, err.Error())
@@ -103,6 +115,8 @@ func doLog(ctx context.Context, response http.ResponseWriter, end string, days s
 		if ferr, ok := err.(*datastore.ErrFieldMismatch); ok {
 			if ferr.FieldName == "Keep" {
 				// Ignore the Keep field for the "latest" entry
+				// TODO: Avoid this by storing latest as its own Entity. It doesn't
+				// really matter if it's included in log or not.
 				err = nil
 			}
 		}
@@ -151,8 +165,13 @@ func doUpdate(ctx context.Context, response http.ResponseWriter) error {
 	haveLatest := err == nil
 
 	// If the temperatures haven't changed and we don't need to keep the running entry
+	// TODO: Try to coalesce when returning to the previous temp (since Air bounces around).
+	// Eg. If matching the most recent comitted Temp then update latest temps to match.
+	// Maybe apply retroactively to reduce record count and smooth the data.
+	// Ensure there's a record at least once every 30 minutes (which should pretty much
+	// always be the case anyway) to make it easier to detect long outages.
 	same := haveLatest && temps.Air == latest.Air && temps.Heater == latest.Heater && temps.Pool == latest.Pool
-	if same && !latest.Keep {
+	if same && !latest.Keep && temps.Timestamp.Sub(latest.Timestamp).Minutes() < 30 {
 		// Update the running entry with the new timestamp
 		latest.Timestamp = temps.Timestamp
 		_, err = datastore.Put(ctx, latestKey, &latest)
@@ -184,6 +203,102 @@ func doUpdate(ctx context.Context, response http.ResponseWriter) error {
 	fmt.Fprintf(response, "Added entry: %+v", temps)
 	return nil
 }
+
+func dailyHandler(response http.ResponseWriter, request *http.Request) {
+	ctx := appengine.NewContext(request)
+	err := doDaily(ctx, response)
+	if err != nil {
+		log.Criticalf(ctx, err.Error())
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func toDate(t time.Time, loc *time.Location) time.Time {
+	lt := t.In(loc)
+	d := time.Date(lt.Year(), lt.Month(), lt.Day(), 0, 0, 0, 0, loc)
+	return d
+}
+
+func doDaily(ctx context.Context, response http.ResponseWriter) error {
+	loc, err := time.LoadLocation(timeZone)
+	if err != nil {
+		return errors.New("Failed to load timezone: " + err.Error())
+	}
+
+	// For now just use yesterday.
+	today := toDate(time.Now(), loc)
+	startTime := today.AddDate(0, 0, -1)
+	endTime := today
+
+	// Loop over all temps in the given day
+	heatSeconds := 0.0
+	errorSeconds := 0.0
+	tempSeconds := 0.0
+	poolDegreeSeconds := 0.0
+	airDegreeSeconds := 0.0
+	lastTime := startTime
+	query := datastore.NewQuery("Temps").
+		Filter("Timestamp >=", startTime).
+		Filter("Timestamp <", endTime).
+		Order("Timestamp")
+	for it := query.Run(ctx); ; {
+		var temps Temps
+		_, err := it.Next(&temps)
+		if err == datastore.Done {
+			// TODO: Read one additional entry up to endDate?
+			break
+		} else {
+			if ferr, ok := err.(*datastore.ErrFieldMismatch); ok {
+				if ferr.FieldName == "Keep" {
+					// Ignore the Keep field for the "latest" entry
+					err = nil
+				}
+			}
+			if err != nil {
+				return errors.New("Query Next failed: " + err.Error())
+			}
+		}
+
+		// Consider temps to represent the state from lastTime until temps.timestamp
+		// Should be roughly equivalent to the other direction, but is simpler to
+		// implement.
+		// Probably want to skip -99 entries - subtract from total time.
+		// Consider detecting substantial missed sections and skipping the date.
+		seconds := temps.Timestamp.Sub(lastTime).Seconds()
+		if seconds > 60*60 {
+			// A gap in data greater than an hour should only be a bug - skip this entry
+		} else if temps.Heater == tempErr || temps.Air == tempErr || temps.Pool == tempErr {
+			errorSeconds += seconds
+		} else {
+			if temps.Heater > 0 {
+				heatSeconds += seconds
+			}
+			poolDegreeSeconds += float64(temps.Pool) * seconds
+			airDegreeSeconds += float64(temps.Air) * seconds
+			tempSeconds += seconds
+		}
+		lastTime = temps.Timestamp
+	}
+
+	if tempSeconds == 0 {
+		return nil
+	}
+
+	day := Day{
+		Date:          startTime,
+		HeaterMinutes: round(heatSeconds / 60),
+		AvgAir:        round(airDegreeSeconds / tempSeconds),
+		AvgPool:       round(poolDegreeSeconds / tempSeconds),
+		TotalMinutes:  round((tempSeconds + errorSeconds) / 60),
+		ErrorMinutes:  round(errorSeconds / 60),
+	}
+	out, err := json.Marshal(day)
+	fmt.Fprintf(response, "Day summary: %s\n", out)
+
+	return nil
+}
+
+// 	fmt.Fprintf(response, "date, totalMinutes, heaterMinutes, airMean, poolMean\n")
 
 func getSession(ctx context.Context) (Session, error) {
 	var session Session
@@ -217,7 +332,7 @@ func login(ctx context.Context) (Session, error) {
 	return session, nil
 }
 
-type Secrets struct {
+type secrets struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
@@ -229,7 +344,7 @@ func signIn(ctx context.Context) (Session, error) {
 		return Session{}, errors.New("Failed to read secrets: " + err.Error())
 	}
 
-	var secrets Secrets
+	var secrets secrets
 	if err = json.Unmarshal(raw, &secrets); err != nil {
 		return Session{}, errors.New("Failed to parse secrets.json: " + err.Error())
 	}
@@ -262,11 +377,11 @@ func signIn(ctx context.Context) (Session, error) {
 		return Session{}, errors.New("sign_in.json JSON parse failure: " + err.Error())
 	}
 
-	if session.AuthenticationToken == "" || session.Id == "" || session.UserId == 0 {
+	if session.AuthenticationToken == "" || session.ID == "" || session.UserID == 0 {
 		return Session{}, errors.New("sign_in.json unexpected result")
 	}
 
-	log.Infof(ctx, "New session created: "+session.Id)
+	log.Infof(ctx, "New session created: "+session.ID)
 	return session, nil
 }
 
@@ -274,7 +389,7 @@ func getDevice(ctx context.Context, session Session) (string, error) {
 	var url = "https://support.iaqualink.com/devices.json" +
 		"?api_key=" + apiKey +
 		"&authentication_token=" + session.AuthenticationToken +
-		"&user_id=" + strconv.Itoa(session.UserId)
+		"&user_id=" + strconv.Itoa(session.UserID)
 	client := urlfetch.Client(ctx)
 	resp, err := client.Get(url)
 	if err != nil {
@@ -309,7 +424,7 @@ func getTemps(ctx context.Context, session Session, attempts int) (Temps, error)
 	var url = "https://iaqualink-api.realtime.io/v1/mobile/session.json" +
 		"?actionID=command&command=get_home" +
 		"&serial=" + session.DeviceSerial +
-		"&sessionID=" + session.Id
+		"&sessionID=" + session.ID
 	client := urlfetch.Client(ctx)
 
 	resp, err := client.Get(url)
@@ -340,9 +455,8 @@ func getTemps(ctx context.Context, session Session, attempts int) (Temps, error)
 			}
 			attempts--
 			return getTemps(ctx, session, attempts)
-		} else {
-			return Temps{}, errors.New("session.json empty body")
 		}
+		return Temps{}, errors.New("session.json empty body")
 	}
 
 	var response struct {
@@ -368,10 +482,9 @@ func getTemps(ctx context.Context, session Session, attempts int) (Temps, error)
 			time.Sleep(10 * time.Second)
 			attempts--
 			return getTemps(ctx, session, attempts)
-		} else {
-			log.Errorf(ctx, "Device status "+status+", giving up")
-			return Temps{Air: tempErr, Pool: tempErr, Heater: tempErr}, nil
 		}
+		log.Errorf(ctx, "Device status "+status+", giving up")
+		return Temps{Air: tempErr, Pool: tempErr, Heater: tempErr}, nil
 	}
 
 	// Compute heater temperature.
@@ -453,6 +566,7 @@ func displayHandler(response http.ResponseWriter, request *http.Request) {
 func main() {
 	http.HandleFunc("/log.csv", logHandler)
 	http.HandleFunc("/update", updateHandler)
+	http.HandleFunc("/daily", dailyHandler)
 	http.HandleFunc("/display", displayHandler)
 	appengine.Main() // Starts the server to receive requests
 }
